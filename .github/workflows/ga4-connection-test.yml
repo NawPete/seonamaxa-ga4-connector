@@ -1,0 +1,54 @@
+# Test połączenia z GA4 (TYLKO ODCZYT): jedno zapytanie runReport za ostatnie 7 pełnych dni.
+# Uruchamia wyłącznie właściciel ręcznie: Actions → ga4-connection-test → Run workflow (gałąź main).
+# Brak wyzwalaczy push / pull_request / schedule — workflow nigdy nie startuje sam.
+# Repozytorium jest PUBLICZNE: log pokazuje tylko „działa / błąd” i „dane są / brak”, bez wartości metryk.
+# Bez Search Console, bez zapisu, bez instalowania pakietów, bez klucza JSON.
+# Token: Workload Identity Federation, zakres analytics.readonly, ważny 5 minut, nie trafia do pliku ani zmiennych środowiska.
+# Zmienne (nie sekrety) w środowisku production-readonly: GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT_EMAIL, GA4_PROPERTY_ID.
+name: ga4-connection-test
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: ga4-connection-test
+  cancel-in-progress: false
+
+jobs:
+  ga4:
+    # Tylko z gałęzi main (dodatkowo: reguła środowiska i warunek OIDC po stronie Google)
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: production-readonly
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Pobranie wyłącznie skryptu testu z tego samego commitu main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10   # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            autopilot/tools/ga4_connection_test.py
+            autopilot/STOP
+          sparse-checkout-cone-mode: false
+      - name: Token Google tylko do odczytu GA4 (WIF, bez klucza JSON)
+        id: gauth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093   # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/analytics.readonly
+          access_token_lifetime: 300s
+          create_credentials_file: false
+          export_environment_variables: false
+      - name: Jedno zapytanie GA4 Data API runReport
+        env:
+          GOOGLE_OAUTH_ACCESS_TOKEN: ${{ steps.gauth.outputs.access_token }}
+          GA4_PROPERTY_ID: ${{ vars.GA4_PROPERTY_ID }}
+          GA4_EXPECTED_PROPERTY_ID: "551840890"
+        run: python3 -I autopilot/tools/ga4_connection_test.py
